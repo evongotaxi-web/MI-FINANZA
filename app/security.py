@@ -63,6 +63,10 @@ def _serializer() -> URLSafeSerializer:
     return URLSafeSerializer(_secret_key(), salt="mis-finanzas-session")
 
 
+def _oauth_serializer() -> URLSafeSerializer:
+    return URLSafeSerializer(_secret_key(), salt="mis-finanzas-oauth")
+
+
 def encode_session(data: SessionData) -> str:
     return _serializer().dumps({"user_id": data.user_id})
 
@@ -74,5 +78,19 @@ def decode_session(value: str) -> Optional[SessionData]:
         if not isinstance(user_id, str) or not user_id:
             return None
         return SessionData(user_id=user_id)
+    except BadSignature:
+        return None
+
+
+def encode_oauth(data: dict[str, object]) -> str:
+    return _oauth_serializer().dumps(data)
+
+
+def decode_oauth(value: str) -> Optional[dict[str, object]]:
+    try:
+        raw: Any = _oauth_serializer().loads(value)
+        if not isinstance(raw, dict):
+            return None
+        return raw
     except BadSignature:
         return None

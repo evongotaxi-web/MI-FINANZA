@@ -3,17 +3,23 @@ from __future__ import annotations
 import csv
 import html
 import io
+import json
 import os
+import secrets
+import time
+import urllib.parse
+from base64 import urlsafe_b64decode
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.db import get_db, init_db
-from app.security import SessionData, decode_session, encode_session
+from app.security import SessionData, decode_oauth, decode_session, encode_oauth, encode_session
 from app.services import (
     ROLE_ADMIN,
     ROLE_FREE,
@@ -26,11 +32,15 @@ from app.services import (
     close_month,
     compute_bruto_dia_cents,
     create_user,
+    create_user_firebase,
     ensure_can_manage_user,
     ensure_month_open,
     get_company,
     get_user,
+    get_user_by_email,
+    get_user_by_firebase_uid,
     is_month_closed,
+    link_firebase_uid,
     month_expenses_by_currency,
     month_expenses_not_in_bank_by_currency,
     month_income_breakdown,
@@ -122,16 +132,33 @@ def require_premium_user(user=Depends(require_user_record)):
     return user
 
 
-def _set_session_cookie(response: Response, user_id: str) -> None:
+def _cookie_secure(request: Request) -> bool:
+    proto = request.headers.get("x-forwarded-proto")
+    if proto:
+        return proto.lower() == "https"
+    return request.url.scheme == "https"
+
+
+def _set_session_cookie(response: Response, request: Request, user_id: str) -> None:
     token = encode_session(SessionData(user_id=user_id))
     response.set_cookie(
         "mf_session",
         token,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=_cookie_secure(request),
         max_age=60 * 60 * 24 * 180,
     )
+
+
+def _base_url(request: Request) -> str:
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or request.url.netloc
+    )
+    return f"{proto}://{host}".rstrip("/")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -148,7 +175,18 @@ def vite_client_placeholder() -> Response:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request) -> Response:
-    return templates.TemplateResponse("auth_login.html", {"request": request})
+    error = request.query_params.get("error")
+    firebase_config = _firebase_client_config()
+    firebase_config_json = json.dumps(firebase_config) if firebase_config else None
+    return templates.TemplateResponse(
+        "auth_login.html",
+        {
+            "request": request,
+            "error": error,
+            "firebase_config": firebase_config,
+            "firebase_config_json": firebase_config_json,
+        },
+    )
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -166,7 +204,7 @@ def login(
             status_code=400,
         )
     resp = RedirectResponse("/dashboard", status_code=302)
-    _set_session_cookie(resp, result.user_id)
+    _set_session_cookie(resp, request, result.user_id)
     return resp
 
 
@@ -191,7 +229,241 @@ def register(
             status_code=400,
         )
     resp = RedirectResponse("/dashboard", status_code=302)
-    _set_session_cookie(resp, result.user_id)
+    _set_session_cookie(resp, request, result.user_id)
+    return resp
+
+
+def _firebase_client_config() -> Optional[dict[str, str]]:
+    api_key = os.environ.get("FIREBASE_API_KEY", "").strip()
+    auth_domain = os.environ.get("FIREBASE_AUTH_DOMAIN", "").strip()
+    project_id = os.environ.get("FIREBASE_PROJECT_ID", "").strip()
+    app_id = os.environ.get("FIREBASE_APP_ID", "").strip()
+    messaging_sender_id = os.environ.get("FIREBASE_MESSAGING_SENDER_ID", "").strip()
+    if not api_key or not auth_domain:
+        return None
+    cfg: dict[str, str] = {"apiKey": api_key, "authDomain": auth_domain}
+    if project_id:
+        cfg["projectId"] = project_id
+    if app_id:
+        cfg["appId"] = app_id
+    if messaging_sender_id:
+        cfg["messagingSenderId"] = messaging_sender_id
+    return cfg
+
+
+@app.post("/auth/firebase")
+async def auth_firebase(
+    request: Request,
+    id_token: str = Form(...),
+    conn=Depends(get_db),
+) -> Response:
+    api_key = os.environ.get("FIREBASE_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Firebase no configurado")
+
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        res = await client.post(
+            "https://identitytoolkit.googleapis.com/v1/accounts:lookup",
+            params={"key": api_key},
+            json={"idToken": id_token},
+        )
+    if res.status_code != 200:
+        return JSONResponse({"ok": False, "error": "Token inválido"}, status_code=400)
+    raw = res.json()
+    users = raw.get("users")
+    if not isinstance(users, list) or not users:
+        return JSONResponse({"ok": False, "error": "Token inválido"}, status_code=400)
+    info = users[0] if isinstance(users[0], dict) else {}
+    firebase_uid = str(info.get("localId") or "").strip()
+    if not firebase_uid:
+        return JSONResponse({"ok": False, "error": "Token inválido"}, status_code=400)
+
+    email = str(info.get("email") or "").strip().lower()
+    email_verified = bool(info.get("emailVerified") is True)
+    provider = "firebase"
+    provider_infos = info.get("providerUserInfo")
+    if isinstance(provider_infos, list) and provider_infos:
+        first = provider_infos[0] if isinstance(provider_infos[0], dict) else {}
+        prov_id = str(first.get("providerId") or "").strip()
+        if prov_id:
+            provider = prov_id
+
+    user = get_user_by_firebase_uid(conn, firebase_uid=firebase_uid)
+    if not user and email:
+        user = get_user_by_email(conn, email=email)
+        if user:
+            link_firebase_uid(
+                conn,
+                user_id=user.id,
+                firebase_uid=firebase_uid,
+                auth_provider=provider,
+            )
+
+    user_id: str
+    if user:
+        if (not user.is_active) or user.deleted_at:
+            return JSONResponse({"ok": False, "error": "Cuenta suspendida"}, status_code=403)
+        user_id = user.id
+    else:
+        if not email:
+            email = f"firebase-{firebase_uid}@misfinanzas.local"
+        if provider.endswith("password") and email and (not email_verified):
+            return JSONResponse({"ok": False, "error": "Email no verificado"}, status_code=403)
+        created = create_user_firebase(
+            conn,
+            email=email,
+            password=secrets.token_urlsafe(32),
+            firebase_uid=firebase_uid,
+            auth_provider=provider,
+        )
+        user_id = created.user_id
+
+    resp = JSONResponse({"ok": True, "redirect": "/dashboard"})
+    _set_session_cookie(resp, request, user_id)
+    return resp
+
+
+def _jwt_payload(token: str) -> dict[str, object]:
+    parts = token.split(".")
+    if len(parts) < 2:
+        return {}
+    raw = parts[1]
+    pad = "=" * (-len(raw) % 4)
+    data = urlsafe_b64decode(raw + pad)
+    val = json.loads(data.decode("utf-8"))
+    return val if isinstance(val, dict) else {}
+
+
+def _google_oauth_config(request: Request) -> dict[str, str]:
+    client_id = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=503, detail="Google OAuth no configurado")
+    redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI", "").strip()
+    if not redirect_uri:
+        redirect_uri = f"{_base_url(request)}/auth/google/callback"
+    return {"client_id": client_id, "client_secret": client_secret, "redirect_uri": redirect_uri}
+
+
+@app.get("/auth/google/start")
+def auth_google_start(request: Request) -> Response:
+    if _current_user_id(request):
+        return RedirectResponse("/dashboard", status_code=302)
+    try:
+        cfg = _google_oauth_config(request)
+    except HTTPException:
+        return RedirectResponse("/login?error=Google%20no%20configurado", status_code=302)
+
+    state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    payload = encode_oauth({"state": state, "nonce": nonce, "ts": int(time.time())})
+
+    params = {
+        "client_id": cfg["client_id"],
+        "redirect_uri": cfg["redirect_uri"],
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "nonce": nonce,
+        "prompt": "select_account",
+    }
+    url = "https://accounts.google.com/o/oauth2/v2/auth?" + urllib.parse.urlencode(params)
+    resp = RedirectResponse(url, status_code=302)
+    resp.set_cookie(
+        "mf_google_oauth",
+        payload,
+        httponly=True,
+        samesite="lax",
+        secure=_cookie_secure(request),
+        max_age=60 * 10,
+    )
+    return resp
+
+
+@app.get("/auth/google/callback", response_class=HTMLResponse)
+async def auth_google_callback(request: Request, conn=Depends(get_db)) -> Response:
+    if _current_user_id(request):
+        return RedirectResponse("/dashboard", status_code=302)
+    error = request.query_params.get("error")
+    if error:
+        return RedirectResponse("/login?error=Acceso%20con%20Google%20cancelado", status_code=302)
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state:
+        return RedirectResponse("/login?error=Google%20no%20válido", status_code=302)
+
+    cookie = request.cookies.get("mf_google_oauth")
+    data = decode_oauth(cookie) if cookie else None
+    if not data or str(data.get("state") or "") != str(state):
+        return RedirectResponse("/login?error=Sesión%20caducada", status_code=302)
+
+    nonce_expected = str(data.get("nonce") or "")
+
+    try:
+        cfg = _google_oauth_config(request)
+    except HTTPException:
+        return RedirectResponse("/login?error=Google%20no%20configurado", status_code=302)
+
+    async with httpx.AsyncClient(timeout=12.0) as client:
+        token_res = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "code": code,
+                "client_id": cfg["client_id"],
+                "client_secret": cfg["client_secret"],
+                "redirect_uri": cfg["redirect_uri"],
+                "grant_type": "authorization_code",
+            },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        if token_res.status_code != 200:
+            return RedirectResponse("/login?error=Google%20falló", status_code=302)
+        token_json = token_res.json()
+        id_token = str(token_json.get("id_token") or "")
+        if not id_token:
+            return RedirectResponse("/login?error=Google%20falló", status_code=302)
+
+        info_res = await client.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": id_token},
+        )
+        if info_res.status_code != 200:
+            return RedirectResponse("/login?error=Google%20falló", status_code=302)
+        info = info_res.json()
+        if str(info.get("aud") or "") != cfg["client_id"]:
+            return RedirectResponse("/login?error=Google%20no%20válido", status_code=302)
+        if str(info.get("email_verified") or "").lower() not in ("true", "1", "yes"):
+            return RedirectResponse("/login?error=Email%20no%20verificado", status_code=302)
+        email = str(info.get("email") or "").strip().lower()
+        if not email or "@" not in email:
+            return RedirectResponse("/login?error=Google%20no%20válido", status_code=302)
+
+    try:
+        payload = _jwt_payload(id_token)
+        if nonce_expected and str(payload.get("nonce") or "") != nonce_expected:
+            return RedirectResponse("/login?error=Sesión%20caducada", status_code=302)
+    except Exception:
+        return RedirectResponse("/login?error=Google%20no%20válido", status_code=302)
+
+    user = get_user_by_email(conn, email=email)
+    if user:
+        if (not user.is_active) or user.deleted_at:
+            return RedirectResponse("/login?error=Cuenta%20suspendida", status_code=302)
+        user_id = user.id
+    else:
+        try:
+            created = create_user(conn, email=email, password=secrets.token_urlsafe(32))
+            user_id = created.user_id
+        except ValueError:
+            user2 = get_user_by_email(conn, email=email)
+            if not user2 or (not user2.is_active) or user2.deleted_at:
+                return RedirectResponse("/login?error=No%20autorizado", status_code=302)
+            user_id = user2.id
+
+    resp = RedirectResponse("/dashboard", status_code=302)
+    resp.delete_cookie("mf_google_oauth")
+    _set_session_cookie(resp, request, user_id)
     return resp
 
 

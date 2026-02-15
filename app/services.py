@@ -117,6 +117,111 @@ def get_user(conn: sqlite3.Connection, *, user_id: str) -> UserRecord:
     )
 
 
+def get_user_by_email(conn: sqlite3.Connection, *, email: str) -> Optional[UserRecord]:
+    email_norm = email.strip().lower()
+    if not email_norm or "@" not in email_norm:
+        return None
+    row = conn.execute(
+        """
+        SELECT id, email, role, is_active, deleted_at, created_at
+        FROM users
+        WHERE email = ?
+        """,
+        (email_norm,),
+    ).fetchone()
+    if not row:
+        return None
+    return UserRecord(
+        id=str(row["id"]),
+        email=str(row["email"]),
+        role=str(row["role"] or ROLE_FREE),
+        is_active=int(row["is_active"] or 0) == 1,
+        deleted_at=str(row["deleted_at"]) if row["deleted_at"] else None,
+        created_at=str(row["created_at"]),
+    )
+
+
+def get_user_by_firebase_uid(
+    conn: sqlite3.Connection,
+    *,
+    firebase_uid: str,
+) -> Optional[UserRecord]:
+    firebase_uid_norm = firebase_uid.strip()
+    if not firebase_uid_norm:
+        return None
+    row = conn.execute(
+        """
+        SELECT id, email, role, is_active, deleted_at, created_at
+        FROM users
+        WHERE firebase_uid = ?
+        """,
+        (firebase_uid_norm,),
+    ).fetchone()
+    if not row:
+        return None
+    return UserRecord(
+        id=str(row["id"]),
+        email=str(row["email"]),
+        role=str(row["role"] or ROLE_FREE),
+        is_active=int(row["is_active"] or 0) == 1,
+        deleted_at=str(row["deleted_at"]) if row["deleted_at"] else None,
+        created_at=str(row["created_at"]),
+    )
+
+
+def link_firebase_uid(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    firebase_uid: str,
+    auth_provider: Optional[str] = None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE users
+        SET firebase_uid = ?, auth_provider = COALESCE(?, auth_provider),
+            updated_at = (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+        WHERE id = ?
+        """,
+        (firebase_uid.strip(), auth_provider, user_id),
+    )
+
+
+def create_user_firebase(
+    conn: sqlite3.Connection,
+    *,
+    email: str,
+    password: str,
+    firebase_uid: str,
+    auth_provider: str,
+) -> AuthResult:
+    email_norm = email.strip().lower()
+    if not email_norm:
+        raise ValueError("Email inválido")
+    user_id = new_id()
+    try:
+        conn.execute(
+            """
+            INSERT INTO users (
+              id, email, password_hash, role, is_active, firebase_uid, auth_provider, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, (strftime('%Y-%m-%dT%H:%M:%fZ','now')))
+            """,
+            (
+                user_id,
+                email_norm,
+                hash_password(password),
+                ROLE_FREE,
+                1,
+                firebase_uid,
+                auth_provider,
+            ),
+        )
+    except sqlite3.IntegrityError:
+        raise ValueError("Ese email ya existe") from None
+    row = conn.execute("SELECT role FROM users WHERE id = ?", (user_id,)).fetchone()
+    return AuthResult(user_id=user_id, role=str(row["role"] if row else ROLE_FREE))
+
 def can_manage_user(*, actor_role: str, target_role: str) -> bool:
     return role_level(actor_role) > role_level(target_role)
 

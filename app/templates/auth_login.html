@@ -31,13 +31,51 @@
     <span class="muted">o</span>
   </div>
 
-  <button class="btn btn-social btn-lg" type="button" disabled>
+  {% if firebase_config_json %}
+  <div id="firebaseui-auth-container"></div>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <link rel="stylesheet" href="https://www.gstatic.com/firebasejs/ui/6.0.2/firebase-ui-auth.css" />
+  <script src="https://www.gstatic.com/firebasejs/ui/6.0.2/firebase-ui-auth.js"></script>
+  <script>
+    const firebaseConfig = {{ firebase_config_json | safe }};
+    firebase.initializeApp(firebaseConfig);
+    const ui = new firebaseui.auth.AuthUI(firebase.auth());
+    const uiConfig = {
+      callbacks: {
+        signInSuccessWithAuthResult: async function(authResult) {
+          const idToken = await authResult.user.getIdToken();
+          const body = new URLSearchParams();
+          body.set("id_token", idToken);
+          const res = await fetch("/auth/firebase", {
+            method: "POST",
+            headers: {"Content-Type": "application/x-www-form-urlencoded"},
+            credentials: "include",
+            body,
+          });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data && data.redirect) {
+            window.location.href = data.redirect;
+            return false;
+          }
+          window.location.href = "/login?error=No%20se%20pudo%20iniciar%20sesión";
+          return false;
+        },
+      },
+      signInFlow: "popup",
+      signInOptions: [
+        firebase.auth.GoogleAuthProvider.PROVIDER_ID,
+        firebase.auth.EmailAuthProvider.PROVIDER_ID,
+        firebase.auth.PhoneAuthProvider.PROVIDER_ID,
+      ],
+    };
+    ui.start("#firebaseui-auth-container", uiConfig);
+  </script>
+  {% else %}
+  <a class="btn btn-social btn-lg" href="/auth/google/start">
     <span class="social-icon" data-icon="google" aria-hidden="true"></span>
     Continuar con Google
-  </button>
-  <button class="btn btn-social btn-lg" type="button" disabled>
-    <span class="social-icon" data-icon="apple" aria-hidden="true"></span>
-    Continuar con Apple
-  </button>
+  </a>
+  {% endif %}
 </form>
 {% endblock %}

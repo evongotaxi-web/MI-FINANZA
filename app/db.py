@@ -149,7 +149,11 @@ CREATE INDEX IF NOT EXISTS idx_debt_payments_debt_date ON debt_payments(debt_id,
 
 def _apply_migrations(conn: sqlite3.Connection) -> None:
     current = int(conn.execute("PRAGMA user_version;").fetchone()[0])
-    migrations = [_migration_1_roles_and_soft_delete, _migration_2_audit_logs]
+    migrations = [
+        _migration_1_roles_and_soft_delete,
+        _migration_2_audit_logs,
+        _migration_3_firebase_auth,
+    ]
     for idx, fn in enumerate(migrations, start=1):
         if current >= idx:
             continue
@@ -201,3 +205,13 @@ def _migration_2_audit_logs(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_audit_logs_target ON audit_logs(target_user_id, created_at);
         """
     )
+
+
+def _migration_3_firebase_auth(conn: sqlite3.Connection) -> None:
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(users);").fetchall()}
+    if "firebase_uid" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN firebase_uid TEXT;")
+    if "auth_provider" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN auth_provider TEXT;")
+
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);")
