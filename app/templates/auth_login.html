@@ -1,0 +1,43 @@
+{% extends "auth_base.html" %}
+
+{% block content %}
+<form method="post" action="/login" class="form auth-form">
+  <label class="label">
+    <span class="muted">Correo electrónico</span>
+    <div class="field">
+      <span class="field-icon" data-icon="mail" aria-hidden="true"></span>
+      <input class="input field-input" type="email" name="email" required autocomplete="email" placeholder="Correo electrónico" />
+    </div>
+  </label>
+  <label class="label">
+    <span class="muted">Contraseña</span>
+    <div class="field">
+      <span class="field-icon" data-icon="lock" aria-hidden="true"></span>
+      <input id="password" class="input field-input" type="password" name="password" required autocomplete="current-password" placeholder="Contraseña" />
+      <button class="field-action" type="button" onclick="const i=document.getElementById('password'); i.type = i.type === 'password' ? 'text' : 'password'">
+        <span class="field-icon" data-icon="eye" aria-hidden="true"></span>
+      </button>
+    </div>
+  </label>
+  <button class="btn btn-primary btn-lg" type="submit">Iniciar Sesión</button>
+
+  <div class="auth-links">
+    <a class="link" href="/register">Crear cuenta</a>
+    <span class="muted">|</span>
+    <a class="link" href="/register">Recuperar contraseña</a>
+  </div>
+
+  <div class="auth-divider">
+    <span class="muted">o</span>
+  </div>
+
+  <button class="btn btn-social btn-lg" type="button" disabled>
+    <span class="social-icon" data-icon="google" aria-hidden="true"></span>
+    Continuar con Google
+  </button>
+  <button class="btn btn-social btn-lg" type="button" disabled>
+    <span class="social-icon" data-icon="apple" aria-hidden="true"></span>
+    Continuar con Apple
+  </button>
+</form>
+{% endblock %}

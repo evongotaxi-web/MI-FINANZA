@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>MIS FINANZAS</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">Mis Finanzas</div>
+        <div class="topbar-right">
+          <button class="month-pill" id="month-pill" type="button"></button>
+          <a class="avatar" href="/ajustes" aria-label="Ajustes"></a>
+          <form class="logout" method="post" action="/logout">
+            <button class="btn btn-ghost btn-icon" type="submit" aria-label="Salir">
+              <span class="icon" data-icon="logout" aria-hidden="true"></span>
+            </button>
+          </form>
+        </div>
+      </header>
+      <nav class="nav nav-primary">
+        <a class="nav-item" href="/dashboard" data-nav="dashboard">Dashboard</a>
+        <a class="nav-item" href="/ingresos" data-nav="ingresos">Ingresos</a>
+        <a class="nav-item" href="/gastos" data-nav="gastos">Gastos</a>
+        <a class="nav-item" href="/banco" data-nav="banco">Banco</a>
+        <a class="nav-item" href="/deudas" data-nav="deudas">Deudas</a>
+        <a class="nav-item" href="/reportes" data-nav="reportes">Reportes</a>
+        <a class="nav-item" href="/ajustes" data-nav="ajustes">Ajustes</a>
+        <a class="nav-item" href="/admin" data-nav="admin">Admin</a>
+      </nav>
+      <main class="main">
+        {% block content %}{% endblock %}
+      </main>
+      <nav class="nav nav-bottom">
+        <a class="nav-item" href="/dashboard" data-nav="dashboard" data-icon="home">Inicio</a>
+        <a class="nav-item" href="/ingresos" data-nav="ingresos" data-icon="income">Ingresos</a>
+        <a class="nav-item" href="/gastos" data-nav="gastos" data-icon="expenses">Gastos</a>
+        <a class="nav-item" href="/banco" data-nav="banco" data-icon="bank">Banco</a>
+        <a class="nav-item" href="/deudas" data-nav="deudas" data-icon="debts">Deudas</a>
+      </nav>
+    </div>
+    <script src="/static/app.js" type="module"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

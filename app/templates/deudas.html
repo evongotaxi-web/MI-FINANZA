@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <h1 class="h1">Deudas</h1>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <div class="card-title">Crear deuda</div>
+      <div id="debt-form-root" data-page="debt-form"></div>
+    </section>
+    <section class="card">
+      <div class="card-title">Listado</div>
+      <div id="debts-root" data-page="debts"></div>
+    </section>
+  </div>
+</div>
+{% endblock %}

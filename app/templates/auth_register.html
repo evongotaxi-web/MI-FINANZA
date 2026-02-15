@@ -1,0 +1,27 @@
+{% extends "auth_base.html" %}
+
+{% block content %}
+<form method="post" action="/register" class="form auth-form">
+  <label class="label">
+    <span class="muted">Correo electrónico</span>
+    <div class="field">
+      <span class="field-icon" data-icon="mail" aria-hidden="true"></span>
+      <input class="input field-input" type="email" name="email" required autocomplete="email" placeholder="Correo electrónico" />
+    </div>
+  </label>
+  <label class="label">
+    <span class="muted">Contraseña</span>
+    <div class="field">
+      <span class="field-icon" data-icon="lock" aria-hidden="true"></span>
+      <input id="password" class="input field-input" type="password" name="password" required autocomplete="new-password" placeholder="Contraseña (mínimo 6)" />
+      <button class="field-action" type="button" onclick="const i=document.getElementById('password'); i.type = i.type === 'password' ? 'text' : 'password'">
+        <span class="field-icon" data-icon="eye" aria-hidden="true"></span>
+      </button>
+    </div>
+  </label>
+  <button class="btn btn-primary btn-lg" type="submit">Crear cuenta</button>
+  <div class="auth-links">
+    <a class="link" href="/login">Ya tengo cuenta</a>
+  </div>
+</form>
+{% endblock %}

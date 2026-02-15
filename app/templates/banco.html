@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page">
+  <div class="page-header">
+    <h1 class="h1">Banco</h1>
+  </div>
+  <div class="grid">
+    <section class="card">
+      <div class="card-title">Saldo</div>
+      <div id="bank-balance-root" data-page="bank-balance"></div>
+    </section>
+    <section class="card">
+      <div class="card-title">Movimientos</div>
+      <div id="bank-movements-root" data-page="bank-movements"></div>
+    </section>
+    <section class="card">
+      <div class="card-title">Cierre de mes</div>
+      <div id="month-close-root" data-page="month-close"></div>
+    </section>
+  </div>
+</div>
+{% endblock %}
